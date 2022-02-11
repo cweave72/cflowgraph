@@ -10,6 +10,8 @@ from rich.panel import Panel
 from rich.theme import Theme
 from rich.tree import Tree
 
+from . import pf
+
 import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
@@ -109,9 +111,14 @@ class CflowParser:
     """Object for handling cflow output and visualizing results.
     """
 
-    def __init__(self, raw_results: List[str]):
+    def __init__(self, raw_results: List[str], main: str = None) -> None:
         self.nodes = []
         self.console = Console(theme=node_theme)
+        self.nodetree = None
+
+        if len(raw_results) == 0:
+            logger.info("No results to process.")
+            return
 
         for entry in raw_results:
             m = cflow_re.match(entry)
@@ -121,21 +128,53 @@ class CflowParser:
                 self.nodes.append(node)
 
         # Build node tree object.
-        self.build_node_tree()
+        self.build_node_tree(main)
 
-    def build_node_tree(self):
+    def build_node_tree(self, main : str = None) -> None:
         """Builds a recursive node list representing the call graph.
         """
+        # The following is a work-around for a short-coming with cflow. It
+        # doesn't seem to detect functions as the 'main' function if the
+        # function is declared as static. It will default by dumping call
+        # graphs for every function (there will be multiple entries with
+        # level=0). The desired 'main' function will still be in the list, but
+        # it will not be the first entry, so we need to find it. This will tell
+        # us where to start in the list to build the node tree.
+        if main:
+            for k, node in enumerate(self.nodes):
+                if node.name == main and node.level == 0:
+                    logger.debug(f"Found main={main} at index={k}")
+                    break
+            else:
+                logger.error(f"Could not find main function {main}")
+                return
+
+            # Extract call graph from this point (all nodes after that
+            # have level > 0)
+            m = k+1
+            while True:
+                if self.nodes[m].level > 0:
+                    m += 1
+                else:
+                    logger.debug(f"Found end of graph at {m}: {self.nodes[m]}")
+                    stop = m
+                    break
+        else:
+            k = 0
+            stop = len(self.nodes)
+
+        nodes = self.nodes[k:stop]
+        #logger.debug(f"nodes={pf(nodes)}")
+
         # Root node is always the first node in the list (level = 0).
-        self.nodetree = NodeTree(root=self.nodes[0])
+        self.nodetree = NodeTree(root=nodes[0])
         root_branch = Branch()
         self.nodetree.add(root_branch)
-        nodes = iter(self.nodes[1:])
+        iternodes = iter(nodes)
         try:
-            self.recurse_nodes(next(nodes), nodes, root_branch, 1)
+            self.recurse_nodes(next(iternodes), iternodes, root_branch, 0)
         except StopIteration:
             pass
-        #self.console.print(self.nodetree)
 
     def recurse_nodes(self, node, nodes, parent_branch, parent_level):
         while True:
@@ -154,6 +193,25 @@ class CflowParser:
 
             node = next(nodes)
 
+    def rich_tree(self,
+                  show_signatures: bool = False,
+                  pager: bool = False) -> None:
+        """Renders a tree view of the call graph using rich.tree.
+        """
+        if self.nodetree is None:
+            logger.error("No data to process.")
+            return
+
+        # Parent node is always the first node in the list (level = 0).
+        tree = Tree("Call Graph", hide_root=True)
+        root = tree.add(Panel.fit(f"[root]{self.nodetree.root.name}[/root]"), guide_style='red')
+        self.add_tree_branches(root, self.nodetree.branch.items, show_signatures)
+        if pager:
+            with self.console.pager(styles=True):
+                self.console.print(tree)
+        else:
+            self.console.print(tree)
+
     def add_tree_branches(self, parent, items, show_signatures) -> None:
         """Recursively builds the tree.
         """
@@ -162,12 +220,3 @@ class CflowParser:
                 child = parent.add(item.print(show_signatures, path_parts=5))
             elif isinstance(item, Branch):
                 self.add_tree_branches(child, item.items, show_signatures)
-
-    def rich_tree(self, show_signatures: bool = False) -> None:
-        """Renders a tree view of the call graph using rich.tree.
-        """
-        # Parent node is always the first node in the list (level = 0).
-        tree = Tree("Call Graph", hide_root=True)
-        root = tree.add(Panel.fit(f"[root]{self.nodetree.root.name}[/root]"), guide_style='red')
-        self.add_tree_branches(root, self.nodetree.branch.items, show_signatures)
-        self.console.print(tree)

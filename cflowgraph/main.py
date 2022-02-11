@@ -32,11 +32,14 @@ def get_file_list(root: str,
     else:
         excludes = excluded_paths + paths_always_exclude
 
+    root = Path(root).expanduser()
+    logger.debug(f"Getting files from {root}")
+
     paths = []
     status_msg = "[magenta]Searching paths for files:[/magenta]"
     i = 0
     with console.status(status_msg) as status:
-        for p in Path(root).rglob('*.[ch]'):
+        for p in root.rglob('*.[ch]'):
             for ex in excludes:
                 if ex in str(p.parent):
                     #logger.debug(f"Skipping {p}")
@@ -44,7 +47,7 @@ def get_file_list(root: str,
             else:
                 paths.append(str(p))
                 #logger.debug(f"p={p}")
-                if i % 10 == 0:
+                if i % 5 == 0:
                     partial_path = ''.join(p.parts[-4:])
                     status.update(
                         f"{status_msg} [blue]({len(paths)})[/blue]: "
@@ -78,11 +81,13 @@ def cflow(paths, **extraopts):
         elif value and isinstance(value, bool):
             cmd.append(f"--{opt.replace('_', '-')}")
 
-    console.print(f"cli: '{' '.join(cmd)}'")
+    logger.info(f"cli: '{' '.join(cmd)}'")
 
+    logger.debug(f"Appending {len(paths)} paths to cli command")
     for path in paths:
         cmd.append(path.strip())
 
+    logger.debug("Running cflow")
     stdout, stderr = shell_cmd(cmd)
     return stdout, stderr
 
@@ -106,7 +111,7 @@ def get_params(**kwargs):
 @click.option('--rootpath', default='.', help="Root path to search for files")
 @click.option('--excludepath', multiple=True, help="Excluded path (can be repeated).")
 @click.option('--nobuiltin-excludes', is_flag=True, help="Don't use any built-in exclude paths.")
-@click.option('--usefile', help="Path to file containing paths")
+@click.option('--usefile', help="Path to file containing paths ('.' for last written c.files)")
 @click.option('--loglevel', default='info', help="Logging level [debug, info, warning, error]")
 @click.option('--debug', is_flag=True, help="Shortcut for --loglevel=debug")
 @click.pass_context
@@ -126,6 +131,9 @@ def cli(ctx, **kwargs):
     ctx.obj['cli_params'] = params
 
     if params.usefile:
+        if params.usefile == '.':
+            params.usefile = 'c.files'
+
         if not Path(params.usefile).exists():
             logger.error(f"File {params.usefile} does not exist. "
                          f"Provide --rootpath option.")
@@ -136,10 +144,9 @@ def cli(ctx, **kwargs):
                 paths = fp.readlines()
                 logger.info(f"Read {len(paths)} paths from {params.usefile}")
     else:
-        logger.debug(f"Getting files from {Path(params.rootpath).resolve()}")
         paths = get_file_list(params.rootpath, params.excludepath,
                               params.nobuiltin_excludes)
-        logger.debug(f"Writing paths to c.files (found {len(paths)} files)")
+        logger.info(f"Writing paths to c.files (found {len(paths)} files)")
         with open('c.files', 'w') as f:
             f.write('\n'.join(paths))
 
@@ -161,8 +168,8 @@ def is_true(arg):
 @click.option('--depth', help="Call graph depth.")
 @click.option('--reverse', is_flag=True, help="Generate reverse graph.")
 @click.option('--format', default='raw', help="Format of output: [raw, tree, dot, png, ...] (default is raw).")
+@click.option('--pager', is_flag=True, help="Use pager for output.")
 @click.option('--stderr', is_flag=True, help="Print cflow stderr output.")
-@click.option('--show-cflow-output', is_flag=True, help="Prints raw cflow output.")
 @click.option('--show-signatures', is_flag=True, help="Shows function signatures.")
 @click.option('--debug', is_flag=True, help="Shortcut for --loglevel=debug")
 @click.pass_context
@@ -197,9 +204,17 @@ def run(ctx, **kwargs):
     paths = ctx.obj['paths']
     stdout, stderr = cflow(paths, **copts)
 
-    if params.format == "raw" or params.show_cflow_output:
-        for line in stdout:
-            console.print(line)
+    if len(stdout) < 2:
+        logger.info("No results from cflow.")
+        return
+
+    if params.format == "raw":
+        lines = '\n'.join(stdout)
+        if params.pager:
+            with console.pager(styles=True):
+                console.print(lines)
+        else:
+            console.print(lines)
 
     if params.stderr:
         console.print("[sea_green1]cflow: stderr[/sea_green1]")
@@ -207,8 +222,8 @@ def run(ctx, **kwargs):
             console.print(line)
 
     if params.format == "tree":
-        cfp = CflowParser(stdout)
-        cfp.rich_tree(params.show_signatures)
+        cfp = CflowParser(stdout, main=f"{params.main}()")
+        cfp.rich_tree(params.show_signatures, pager=params.pager)
 
 
 def entrypoint():

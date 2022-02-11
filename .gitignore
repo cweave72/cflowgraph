@@ -3,3 +3,4 @@
 c.files
 *.log
 .venv/
+*.svg
