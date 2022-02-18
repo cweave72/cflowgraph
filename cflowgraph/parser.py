@@ -1,4 +1,5 @@
 from __future__ import annotations
+import sys
 import re
 
 from typing import Optional, List, Any
@@ -16,6 +17,7 @@ import logging
 logger = logging.getLogger(__name__)
 logger.addHandler(logging.NullHandler())
 
+# Regex for parsing line output from cflow.
 cflow_re = re.compile(r"""
     {\s+(\d+)}                      # group 1 -> depth level
     \s+(\w+?\(\))                   # group 2 -> function name
@@ -24,6 +26,7 @@ cflow_re = re.compile(r"""
     )?
     """, flags=re.DOTALL | re.VERBOSE)
 
+# Rich theme for showing results as a tree graph.
 node_theme = Theme({
     "root": "yellow",
     "level": "cyan",
@@ -44,8 +47,9 @@ class Branch:
 
 @dataclass
 class NodeTree:
-    root: Node
+    root: str
     branch: Optional[Branch] = None
+    static: Optional[bool] = False
 
     def add(self, branch: Branch) -> None:
         self.branch = branch
@@ -111,8 +115,12 @@ class CflowParser:
     """Object for handling cflow output and visualizing results.
     """
 
-    def __init__(self, raw_results: List[str], main: str = None) -> None:
+    def __init__(self,
+                 raw_results: List[str],
+                 main: str = None,
+                 verbose : bool = False) -> None:
         self.nodes = []
+        self.verbose = verbose
         self.console = Console(theme=node_theme)
         self.nodetree = None
 
@@ -128,9 +136,25 @@ class CflowParser:
                 self.nodes.append(node)
 
         # Build node tree object.
-        self.build_node_tree(main)
+        # Sometimes a function will not be in the cflow output at level 0 (not
+        # sure why this occurs). To still attempt to provide a result, we
+        # iteratively search the tree at increasing levels until the desired
+        # function is found at that level - or - it is not found at all.
+        for level in range(0, 9):
+            logger.debug(f"Searching cflow output for main={main} at level {level}")
+            level_found = self.build_node_tree(main, target_level=level)
+            if level_found is None:
+                logger.error(f"Did not find function {main} in cflow output.")
+                sys.exit(1)
+            elif level_found < 0:
+                sys.exit(1)
+            elif level_found == level:
+                logger.debug("Successfully created node tree.")
+                if self.verbose:
+                    logger.debug(f"nodetree = {pf(self.nodetree)}")
+                break
 
-    def build_node_tree(self, main : str = None) -> None:
+    def build_node_tree(self, main : str = None, target_level : int = 0) -> None:
         """Builds a recursive node list representing the call graph.
         """
         # The following is a work-around for a short-coming with cflow. It
@@ -140,41 +164,75 @@ class CflowParser:
         # level=0). The desired 'main' function will still be in the list, but
         # it will not be the first entry, so we need to find it. This will tell
         # us where to start in the list to build the node tree.
+        k = 0
+        stop = len(self.nodes)
+        lowest_level_found = None
+
         if main:
             for k, node in enumerate(self.nodes):
-                if node.name == main and node.level == 0:
-                    logger.debug(f"Found main={main} at index={k}")
-                    break
-            else:
-                logger.error(f"Could not find main function {main}")
-                return
+                if self.verbose:
+                    logger.debug(f"(searching for main) index={k} "
+                                 f"level={node.level} node={node.name}")
 
-            # Extract call graph from this point (all nodes after that
-            # have level > 0)
-            m = k+1
-            while True:
-                if self.nodes[m].level > 0:
-                    m += 1
+                if node.name == main:
+                    if lowest_level_found:
+                        lowest_level_found = min(lowest_level_found, node.level)
+                    else:
+                        lowest_level_found = node.level
+
+                    if node.level == target_level:
+                        logger.debug(f"Found main={main} at index={k} (level={node.level})")
+                        break
+            else:
+                logger.debug(f"Function {main} not found at level {target_level}.")
+                return lowest_level_found
+
+            # If the main function wasn't found at the head of the list, it was
+            # likely a static function and we must find where the graph ends.
+            # The following code attempts to find the end of the call graph by
+            # finding the next function with level 0.
+            if k > 0:
+                # Extract call graph from this point. All nodes after that
+                # have level > 0 if part of the 'main' functions call graph.
+                # We know we've found the end when the current node in the
+                # iteration has a level of 0.
+                m = k+1
+                while m < len(self.nodes):
+                    if self.verbose:
+                        logger.debug(f"(searching for end) index={m} "
+                                     f"(level={self.nodes[m].level}) "
+                                     f"node={self.nodes[m].name}")
+
+                    if self.nodes[m].level > target_level:
+                        m += 1
+                    else:
+                        logger.debug(f"Found end of graph at index {m-1}")
+                        stop = m
+                        break
                 else:
-                    logger.debug(f"Found end of graph at {m}: {self.nodes[m]}")
-                    stop = m
-                    break
-        else:
-            k = 0
-            stop = len(self.nodes)
+                    logger.error(f"Could not find end of graph for function {main}")
+                    return -1
 
         nodes = self.nodes[k:stop]
         #logger.debug(f"nodes={pf(nodes)}")
 
+        # If the starting index in the node list is not 0, then the function
+        # was declared as static (see explaination above).
+        if k == 0:
+            funcion_is_static = False
+        else:
+            funcion_is_static = True
+
         # Root node is always the first node in the list (level = 0).
-        self.nodetree = NodeTree(root=nodes[0])
+        self.nodetree = NodeTree(root=main, static=funcion_is_static)
         root_branch = Branch()
         self.nodetree.add(root_branch)
         iternodes = iter(nodes)
         try:
             self.recurse_nodes(next(iternodes), iternodes, root_branch, 0)
         except StopIteration:
-            pass
+            # Return the passed target level to indicate success.
+            return target_level
 
     def recurse_nodes(self, node, nodes, parent_branch, parent_level):
         while True:
@@ -204,8 +262,12 @@ class CflowParser:
 
         # Parent node is always the first node in the list (level = 0).
         tree = Tree("Call Graph", hide_root=True)
-        root = tree.add(Panel.fit(f"[root]{self.nodetree.root.name}[/root]"), guide_style='red')
-        self.add_tree_branches(root, self.nodetree.branch.items, show_signatures)
+        static_txt = "(static)" if self.nodetree.static else ""
+        root_panel = Panel.fit(f"{static_txt} [root]{self.nodetree.root}[/root]")
+        root = tree.add(root_panel, guide_style='red')
+        self.add_tree_branches(parent=root,
+                               items=self.nodetree.branch.items,
+                               show_signatures=show_signatures)
         if pager:
             with self.console.pager(styles=True):
                 self.console.print(tree)
@@ -213,10 +275,15 @@ class CflowParser:
             self.console.print(tree)
 
     def add_tree_branches(self, parent, items, show_signatures) -> None:
-        """Recursively builds the tree.
+        """Recursively creates branches of a rich tree.
         """
+        child = None
         for item in items:
             if isinstance(item, Node):
                 child = parent.add(item.print(show_signatures, path_parts=5))
             elif isinstance(item, Branch):
-                self.add_tree_branches(child, item.items, show_signatures)
+                if child is None:
+                    child = parent
+                self.add_tree_branches(parent=child,
+                                       items=item.items,
+                                       show_signatures=show_signatures)

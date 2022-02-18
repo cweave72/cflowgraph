@@ -1,12 +1,14 @@
 import shlex
 import subprocess
+import select
 from subprocess import Popen
-from time import time
+from time import time, sleep
 
 from typing import Union, List, Tuple
 
 from rich.logging import RichHandler
 from rich.pretty import pretty_repr as pf
+from rich.console import Console
 
 import logging
 logger = logging.getLogger(__name__)
@@ -53,9 +55,9 @@ def timedfunc(func):
     return wrapped
 
 
-def shell_cmd(cmd: Union[str, List[str]]) -> Tuple[List[str], List[str]]:
+def shell_cmd(cmd: Union[str, List[str]]) -> Tuple[List[str], List[str], int]:
     """Executes a shell command.
-    Returns a tuple (stdout, stderr) as a list of lines.
+    Returns a tuple (stdout, stderr, returncode) as a list of lines.
     """
 
     if isinstance(cmd, str):
@@ -80,4 +82,4 @@ def shell_cmd(cmd: Union[str, List[str]]) -> Tuple[List[str], List[str]]:
     stdout = [line for line in s_out.split('\n')]
     stderr = [line for line in s_err.split('\n')]
 
-    return stdout, stderr
+    return stdout, stderr, proc.returncode

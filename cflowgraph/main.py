@@ -5,6 +5,7 @@ from typing import Iterable, List
 from pathlib import Path
 
 from rich.console import Console
+from rich import inspect
 
 from . import setuplogging, timedfunc, shell_cmd, pf
 from .parser import CflowParser
@@ -59,12 +60,11 @@ def get_file_list(root: str,
     return paths
 
 
-@timedfunc
 def cflow(paths, **extraopts):
     """Runs cflow command and returns results as a list of strings.
     """
     # Check if cflow is installed.
-    stdout, stderr = shell_cmd('cflow --help')
+    stdout, stderr, rc = shell_cmd('cflow --help')
     if stdout is None:
         sys.exit(1)
 
@@ -87,8 +87,12 @@ def cflow(paths, **extraopts):
     for path in paths:
         cmd.append(path.strip())
 
-    logger.debug("Running cflow")
-    stdout, stderr = shell_cmd(cmd)
+    with console.status("[sea_green1]Running cflow...[/sea_green1]"):
+        stdout, stderr, rc = shell_cmd(cmd)
+        if rc != 0:
+            logger.error(f"cflow returned code {rc}")
+            sys.exit(1)
+
     return stdout, stderr
 
 
@@ -105,13 +109,13 @@ def get_params(**kwargs):
     return Params(**kwargs)
 
 
-@click.group("cli",
-             context_settings=dict(help_option_names=['-h', '--help']),
+@click.group(context_settings=dict(help_option_names=['-h', '--help']),
              invoke_without_command=True)
-@click.option('--rootpath', default='.', help="Root path to search for files")
+@click.option('--rootpath', help="Root path to search for files")
 @click.option('--excludepath', multiple=True, help="Excluded path (can be repeated).")
 @click.option('--nobuiltin-excludes', is_flag=True, help="Don't use any built-in exclude paths.")
-@click.option('--usefile', help="Path to file containing paths ('.' for last written c.files)")
+@click.option('--usefile', help="Path to file containing paths.")
+@click.option('--uselastfile', is_flag=True, help="Use last written c.files")
 @click.option('--loglevel', default='info', help="Logging level [debug, info, warning, error]")
 @click.option('--debug', is_flag=True, help="Shortcut for --loglevel=debug")
 @click.pass_context
@@ -124,16 +128,17 @@ def cli(ctx, **kwargs):
     if params.debug:
         params.loglevel = 'debug'
 
-    setuplogging(logger, params.loglevel)
+    setuplogging(logger, params.loglevel, logfile='cflowgraph.log')
     logger.debug(f"Launching cflowgraph. (cli params: {pf(params.__dict__)})")
 
     ctx.obj = {}
     ctx.obj['cli_params'] = params
+    paths = []
+
+    if params.uselastfile:
+        params.usefile = 'c.files'
 
     if params.usefile:
-        if params.usefile == '.':
-            params.usefile = 'c.files'
-
         if not Path(params.usefile).exists():
             logger.error(f"File {params.usefile} does not exist. "
                          f"Provide --rootpath option.")
@@ -143,12 +148,18 @@ def cli(ctx, **kwargs):
             with open(params.usefile) as fp:
                 paths = fp.readlines()
                 logger.info(f"Read {len(paths)} paths from {params.usefile}")
-    else:
+    elif params.rootpath:
         paths = get_file_list(params.rootpath, params.excludepath,
                               params.nobuiltin_excludes)
+        if len(paths) == 0:
+            logger.info("No files found.")
+            sys.exit(0)
+
         logger.info(f"Writing paths to c.files (found {len(paths)} files)")
         with open('c.files', 'w') as f:
             f.write('\n'.join(paths))
+    elif ctx.invoked_subcommand is None:
+        print(cli.get_help(ctx))
 
     ctx.obj['paths'] = paths
 
@@ -172,6 +183,7 @@ def is_true(arg):
 @click.option('--stderr', is_flag=True, help="Print cflow stderr output.")
 @click.option('--show-signatures', is_flag=True, help="Shows function signatures.")
 @click.option('--debug', is_flag=True, help="Shortcut for --loglevel=debug")
+@click.option('--verbose', '-v', is_flag=True, help="Extra debug verbosity")
 @click.pass_context
 def run(ctx, **kwargs):
     """Generates the call graph for a function.
@@ -204,6 +216,11 @@ def run(ctx, **kwargs):
     paths = ctx.obj['paths']
     stdout, stderr = cflow(paths, **copts)
 
+    if params.main:
+        main_func = f"{params.main}()"
+    else:
+        main_func = None
+
     if len(stdout) < 2:
         logger.info("No results from cflow.")
         return
@@ -222,8 +239,12 @@ def run(ctx, **kwargs):
             console.print(line)
 
     if params.format == "tree":
-        cfp = CflowParser(stdout, main=f"{params.main}()")
+        cfp = CflowParser(stdout, main=main_func, verbose=params.verbose)
         cfp.rich_tree(params.show_signatures, pager=params.pager)
+    elif params.format == "dot":
+        logger.info("Dot ouput not yet supported.")
+    elif params.format == "png":
+        logger.info("PNG ouput not yet supported.")
 
 
 def entrypoint():
