@@ -6,9 +6,7 @@ A utility which wraps GNU cflow to provide nicer output to the user.
 
 ## Example Usage
 
-<p align="center">
-    <img src="img/animation.svg">
-</p>
+![Example](./img/animation.svg)
 
 ## Dot output
 
