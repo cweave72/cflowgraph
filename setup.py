@@ -5,6 +5,7 @@ VERSION = "0.1.0"
 required_packages = [
     'click',
     'rich',
+    'graphviz',
     'logging_tree',
 ]
 

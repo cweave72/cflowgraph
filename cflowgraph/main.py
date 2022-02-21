@@ -178,7 +178,7 @@ def is_true(arg):
 @click.option('--main', help="Function target to graph.")
 @click.option('--depth', help="Call graph depth.")
 @click.option('--reverse', is_flag=True, help="Generate reverse graph.")
-@click.option('--format', default='raw', help="Format of output: [raw, tree, dot, png, ...] (default is raw).")
+@click.option('--format', multiple=True, default=['tree'], help="Format of output: [raw, tree, dot] (default is tree).")
 @click.option('--pager', is_flag=True, help="Use pager for output.")
 @click.option('--stderr', is_flag=True, help="Print cflow stderr output.")
 @click.option('--show-signatures', is_flag=True, help="Shows function signatures.")
@@ -225,7 +225,7 @@ def run(ctx, **kwargs):
         logger.info("No results from cflow.")
         return
 
-    if params.format == "raw":
+    if "raw" in params.format:
         lines = '\n'.join(stdout)
         if params.pager:
             with console.pager(styles=True):
@@ -238,13 +238,15 @@ def run(ctx, **kwargs):
         for line in stderr:
             console.print(line)
 
-    if params.format == "tree":
-        cfp = CflowParser(stdout, main=main_func, verbose=params.verbose)
+    cfp = CflowParser(stdout, main=main_func, verbose=params.verbose)
+
+    if "tree" in params.format:
+        logger.info("Generating rich tree.")
         cfp.rich_tree(params.show_signatures, pager=params.pager)
-    elif params.format == "dot":
-        logger.info("Dot ouput not yet supported.")
-    elif params.format == "png":
-        logger.info("PNG ouput not yet supported.")
+
+    if "dot" in params.format:
+        logger.info("Generating dot graph.")
+        cfp.dot_graph()
 
 
 def entrypoint():
