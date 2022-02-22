@@ -320,10 +320,10 @@ class CflowParser:
     def dot_graph(self, **opts):
         opts.setdefault('name', 'call_graph')
         opts.setdefault('comment', f'call graph for {self.nodetree.root}')
-        opts.setdefault('filename', 'cflowgraph.gv')
+        opts.setdefault('filename', 'cflowgraph')
         opts.setdefault('engine', 'dot')
         opts.setdefault('format', 'svg')
-        opts.setdefault('directory', '.graphviz')
+        opts.setdefault('directory', '.')
         opts.setdefault('graph_attr', {'rankdir': 'LR'})
         opts.setdefault('node_attr', {'shape': 'rect',
                                       'margin': '0.05',

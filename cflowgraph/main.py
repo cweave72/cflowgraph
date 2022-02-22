@@ -1,3 +1,4 @@
+import os.path as osp
 import sys
 import click
 
@@ -66,6 +67,7 @@ def cflow(paths, **extraopts):
     # Check if cflow is installed.
     stdout, stderr, rc = shell_cmd('cflow --help')
     if stdout is None:
+        logger.error("Error detecting cflow application. Is it installed?")
         sys.exit(1)
 
     cmd = ['cflow']
@@ -178,10 +180,12 @@ def is_true(arg):
 @click.option('--main', help="Function target to graph.")
 @click.option('--depth', help="Call graph depth.")
 @click.option('--reverse', is_flag=True, help="Generate reverse graph.")
-@click.option('--format', multiple=True, default=['tree'], help="Format of output: [raw, tree, dot] (default is tree).")
+@click.option('--format', multiple=True, default=['tree'], help="Format of output: [tree, dot, raw] (default is tree).")
+@click.option('--dotfile', default='dot.svg', show_default=True,
+              help="File name for dot ouput. Valid extensions are .png, .svg, .pdf")
+@click.option('--show-signatures', is_flag=True, help="Shows function signatures.")
 @click.option('--pager', is_flag=True, help="Use pager for output.")
 @click.option('--stderr', is_flag=True, help="Print cflow stderr output.")
-@click.option('--show-signatures', is_flag=True, help="Shows function signatures.")
 @click.option('--debug', is_flag=True, help="Shortcut for --loglevel=debug")
 @click.option('--verbose', '-v', is_flag=True, help="Extra debug verbosity")
 @click.pass_context
@@ -245,8 +249,10 @@ def run(ctx, **kwargs):
         cfp.rich_tree(params.show_signatures, pager=params.pager)
 
     if "dot" in params.format:
+        name = osp.splitext(params.dotfile)[0]
+        ext = osp.splitext(params.dotfile)[1][1:]
         logger.info("Generating dot graph.")
-        cfp.dot_graph()
+        cfp.dot_graph(filename=name, format=ext)
 
 
 def entrypoint():
